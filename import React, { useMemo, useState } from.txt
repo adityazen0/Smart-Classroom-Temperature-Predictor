@@ -1,0 +1,526 @@
+import React, { useMemo, useState } from 'react';
+import {
+  CheckCircle2,
+  Download,
+  Flame,
+  SlidersHorizontal,
+  Snowflake,
+  Thermometer,
+} from 'lucide-react';
+import {
+  ClassroomInputs,
+  DEFAULT_INPUTS,
+  SCENARIO_PRESETS,
+  classifyComfort,
+  formatCelsiusToFahrenheit,
+  formatHour,
+  generateOccupancyCurve,
+  generateOutsideTempCurve,
+  predictClassroomTemperature,
+  trainClassroomModel,
+} from './ml/classroomModel';
+import { ParameterSidebar } from './components/ParameterSidebar';
+import { IndoorVsOutsideChart, OccupancyVsTempChart } from './components/Charts';
+import { MlInfoAccordion } from './components/MlInfoAccordion';
+import { DatasetModelView } from './components/DatasetModelView';
+import { PythonCodeView, appPyRaw, downloadTextFile } from './components/PythonCodeView';
+
+type ActiveTab = 'dashboard' | 'dataset' | 'python';
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [modelSeed, setModelSeed] = useState<number>(42);
+  const [inputs, setInputs] = useState<ClassroomInputs>(DEFAULT_INPUTS);
+  const [activePresetId, setActivePresetId] = useState<string | null>('standard-lecture');
+  const [mobileInputsOpen, setMobileInputsOpen] = useState<boolean>(false);
+
+  // Automatically train the Random Forest Regressor on startup (and whenever seed changes)
+  const trainedModel = useMemo(() => trainClassroomModel(450, modelSeed), [modelSeed]);
+
+  // Live predicted indoor temperature (°C)
+  const predictedTemp = useMemo(
+    () => predictClassroomTemperature(trainedModel, inputs),
+    [trainedModel, inputs],
+  );
+
+  // Educational comfort status assessment
+  const comfort = useMemo(() => classifyComfort(predictedTemp), [predictedTemp]);
+
+  // Chart curves
+  const outsideCurve = useMemo(
+    () => generateOutsideTempCurve(trainedModel, inputs),
+    [trainedModel, inputs],
+  );
+  const occupancyCurve = useMemo(
+    () => generateOccupancyCurve(trainedModel, inputs),
+    [trainedModel, inputs],
+  );
+
+  const deltaVsPrev = predictedTemp - inputs.previousIndoorTemp;
+  const deltaVsOutside = predictedTemp - inputs.outsideTemp;
+
+  // Comfort bar marker position mapped cleanly across 14°C .. 36°C
+  const scalePercent = Math.min(100, Math.max(0, ((predictedTemp - 14) / (36 - 14)) * 100));
+
+  const handleInputsChange = (next: ClassroomInputs) => {
+    setInputs(next);
+    setActivePresetId(null);
+  };
+
+  const handleSelectPreset = (presetId: string) => {
+    const found = SCENARIO_PRESETS.find((p) => p.id === presetId);
+    if (found) {
+      setInputs({ ...found.inputs });
+      setActivePresetId(found.id);
+    }
+  };
+
+  const handleResetInputs = () => {
+    setInputs({ ...DEFAULT_INPUTS });
+    setActivePresetId('standard-lecture');
+  };
+
+  const handleRetrain = () => {
+    setModelSeed((prev) => prev + 17);
+  };
+
+  const comfortStyles = {
+    Cool: {
+      text: 'text-sky-700',
+      surface: 'bg-sky-50 border-sky-200',
+      icon: Snowflake,
+    },
+    Comfortable: {
+      text: 'text-emerald-700',
+      surface: 'bg-emerald-50 border-emerald-200',
+      icon: CheckCircle2,
+    },
+    Warm: {
+      text: 'text-amber-700',
+      surface: 'bg-amber-50 border-amber-200',
+      icon: Flame,
+    },
+  }[comfort.level];
+
+  const ComfortIcon = comfortStyles.icon;
+
+  return (
+    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+      {/* Top Bar — 3-zone single-row contract */}
+      <header className="sticky top-0 z-30 bg-white border-b border-slate-200">
+        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4 sm:gap-8">
+          {/* Zone 1: Brand Title */}
+          <a
+            href="#top"
+            onClick={(e) => {
+              e.preventDefault();
+              setActiveTab('dashboard');
+            }}
+            className="flex items-center gap-2.5 text-sm sm:text-base font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
+          >
+            <span className="w-8 h-8 rounded-lg bg-blue-700 text-white flex items-center justify-center shrink-0">
+              <Thermometer className="w-4 h-4" aria-hidden="true" />
+            </span>
+            <span className="sm:hidden">Smart Classroom</span>
+            <span className="hidden sm:inline">Smart Classroom Temperature Predictor</span>
+          </a>
+
+          {/* Zone 2: Clean Single-Line Navigation Links */}
+          <nav
+            aria-label="Primary workspace navigation"
+            className="hidden md:flex items-center gap-6 text-sm font-medium"
+          >
+            <button
+              type="button"
+              onClick={() => setActiveTab('dashboard')}
+              className={`py-5 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'dashboard'
+                  ? 'border-blue-700 text-blue-700'
+                  : 'border-transparent text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Dashboard
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('dataset')}
+              className={`py-5 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'dataset'
+                  ? 'border-blue-700 text-blue-700'
+                  : 'border-transparent text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Dataset & Model
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('python')}
+              className={`py-5 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'python'
+                  ? 'border-blue-700 text-blue-700'
+                  : 'border-transparent text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Python & Streamlit
+            </button>
+          </nav>
+
+          {/* Zone 3: Single Primary Action */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => downloadTextFile('app.py', appPyRaw, 'text/x-python')}
+              className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">Download app.py</span>
+              <span className="sm:hidden">Code</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Mobile Tab Switcher (compact single row, stays well within mobile sticky budget) */}
+        <div className="md:hidden border-t border-slate-100 px-4 py-1.5 flex items-center justify-between gap-2 bg-white">
+          <div className="flex items-center gap-1 overflow-x-auto">
+            {(
+              [
+                { id: 'dashboard', label: 'Dashboard' },
+                { id: 'dataset', label: 'Dataset' },
+                { id: 'python', label: 'Python' },
+              ] as const
+            ).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setActiveTab(item.id)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap shrink-0 cursor-pointer ${
+                  activeTab === item.id
+                    ? 'bg-blue-50 text-blue-700'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === 'dashboard' ? (
+            <button
+              type="button"
+              aria-expanded={mobileInputsOpen}
+              onClick={() => setMobileInputsOpen((v) => !v)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 rounded-md whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+              {mobileInputsOpen ? 'Hide Inputs' : 'Edit Inputs'}
+            </button>
+          ) : null}
+        </div>
+      </header>
+
+      {/* Main Workspace Shell */}
+      <div id="top" className="flex-1 max-w-[1600px] w-full mx-auto flex flex-col lg:flex-row">
+        {/* Sidebar for Classroom Input Parameters (always visible on desktop Dashboard; toggleable on mobile) */}
+        {activeTab === 'dashboard' ? (
+          <div className={mobileInputsOpen ? 'block lg:block' : 'hidden lg:block'}>
+            <ParameterSidebar
+              inputs={inputs}
+              onChange={handleInputsChange}
+              onReset={handleResetInputs}
+              onRetrain={handleRetrain}
+              activePresetId={activePresetId}
+              onSelectPreset={handleSelectPreset}
+              modelSeed={trainedModel.metrics.seed}
+              r2Score={trainedModel.metrics.r2}
+              maeScore={trainedModel.metrics.mae}
+              treeCount={trainedModel.metrics.treeCount}
+            />
+          </div>
+        ) : null}
+
+        {/* Right Main Content Canvas */}
+        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
+          {activeTab === 'dashboard' ? (
+            <div className="space-y-6 max-w-6xl mx-auto">
+              {/* Academic Header & Attribution */}
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+                  <span className="font-semibold text-blue-700">Student: Aditya Dwivedi</span>
+                  <span aria-hidden="true">·</span>
+                  <span>BTech AI/ML Academic Demonstration</span>
+                  <span aria-hidden="true">·</span>
+                  <span>Random Forest Regressor ({trainedModel.metrics.treeCount} Trees)</span>
+                </div>
+                <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight text-balance">
+                  Smart Classroom Temperature Predictor
+                </h1>
+                <p className="text-sm text-slate-600 max-w-3xl">
+                  Predict indoor classroom temperature in real time from outdoor weather, student
+                  occupancy, time of day, thermal inertia, and relative humidity.
+                </p>
+              </div>
+
+              {/* Focal Anchor: Large Prediction Metric + Comfort Indicator */}
+              <section
+                aria-label="Predicted indoor classroom temperature and comfort indicator"
+                className="bg-white border border-slate-200 rounded-xl grid grid-cols-1 xl:grid-cols-12 divide-y xl:divide-y-0 xl:divide-x divide-slate-200"
+              >
+                {/* Left: Large Predicted Temperature Metric */}
+                <div className="xl:col-span-5 p-6 flex flex-col justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500">
+                      Predicted Indoor Temperature
+                    </p>
+                    <div className="mt-2 flex items-baseline gap-3">
+                      <span
+                        data-testid="predicted-temp-value"
+                        className="text-5xl sm:text-6xl font-mono font-semibold tracking-tight text-blue-700 tabular-nums"
+                      >
+                        {predictedTemp.toFixed(1)} °C
+                      </span>
+                      <span className="text-base font-mono text-slate-400 tabular-nums">
+                        {formatCelsiusToFahrenheit(predictedTemp)} °F
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs font-mono tabular-nums text-slate-600">
+                    <span>
+                      vs. Previous Indoor:{' '}
+                      <strong className="text-slate-900">
+                        {deltaVsPrev >= 0 ? '+' : ''}
+                        {deltaVsPrev.toFixed(1)} °C
+                      </strong>
+                    </span>
+                    <span>
+                      vs. Outside:{' '}
+                      <strong className="text-slate-900">
+                        {deltaVsOutside >= 0 ? '+' : ''}
+                        {deltaVsOutside.toFixed(1)} °C
+                      </strong>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Right: Temperature Comfort Indicator */}
+                <div className="xl:col-span-7 p-6 flex flex-col justify-between gap-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-500">
+                        Estimated Temperature Comfort Indicator
+                      </p>
+                      <div className="mt-2 flex items-center gap-2.5">
+                        <span
+                          className={`inline-flex items-center justify-center w-8 h-8 rounded-lg border ${comfortStyles.surface} ${comfortStyles.text}`}
+                        >
+                          <ComfortIcon className="w-4 h-4" aria-hidden="true" />
+                        </span>
+                        <div>
+                          <span
+                            data-testid="comfort-status-label"
+                            className={`text-2xl font-bold tracking-tight ${comfortStyles.text}`}
+                          >
+                            {comfort.level}
+                          </span>
+                          <span className="ml-2.5 text-xs font-mono text-slate-500 tabular-nums">
+                            ({comfort.rangeLabel})
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-sm text-slate-600 leading-relaxed">{comfort.guidance}</p>
+
+                  {/* Linear Thermal Comfort Scale (14°C – 36°C) */}
+                  <div className="space-y-2">
+                    <div className="relative h-2.5 rounded-full overflow-hidden flex bg-slate-100">
+                      {/* Cool: 14 to 21 (7/22 = 31.8%) */}
+                      <div className="h-full bg-sky-400/80" style={{ width: '31.8%' }} />
+                      {/* Comfortable: 21 to 25.5 (4.5/22 = 20.5%) */}
+                      <div className="h-full bg-emerald-500/80" style={{ width: '20.5%' }} />
+                      {/* Warm: 25.5 to 36 (10.5/22 = 47.7%) */}
+                      <div className="h-full bg-amber-400/85" style={{ width: '47.7%' }} />
+                      {/* Marker needle */}
+                      <div
+                        className="absolute top-0 bottom-0 w-1 bg-slate-900 rounded-full"
+                        style={{ left: `calc(${scalePercent}% - 2px)` }}
+                        aria-hidden="true"
+                      />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-[11px] font-mono text-slate-500 tabular-nums">
+                      <div className="text-left">
+                        <span className="font-semibold text-slate-700 block sm:inline">Cool</span>{' '}
+                        <span className="whitespace-nowrap">&lt;21.0 °C</span>
+                      </div>
+                      <div className="text-center">
+                        <span className="font-semibold text-slate-700 block sm:inline">
+                          Comfortable
+                        </span>{' '}
+                        <span className="whitespace-nowrap">21.0–25.5 °C</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-semibold text-slate-700 block sm:inline">Warm</span>{' '}
+                        <span className="whitespace-nowrap">&gt;25.5 °C</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-slate-500 pt-2 border-t border-slate-100">
+                    {comfort.disclaimer}
+                  </p>
+                </div>
+              </section>
+
+              {/* Current Input Values Summary Strip */}
+              <section
+                aria-label="Current input parameter summary"
+                className="bg-white border border-slate-200 rounded-xl grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 divide-y sm:divide-y-0 sm:divide-x divide-slate-200"
+              >
+                <div className="p-4">
+                  <p className="text-xs text-slate-500">Outside Temp</p>
+                  <p className="mt-1 text-xl font-mono font-semibold text-slate-900 tabular-nums">
+                    {inputs.outsideTemp.toFixed(1)} °C
+                  </p>
+                </div>
+                <div className="p-4">
+                  <p className="text-xs text-slate-500">Students Present</p>
+                  <p className="mt-1 text-xl font-mono font-semibold text-slate-900 tabular-nums">
+                    {inputs.studentCount}
+                  </p>
+                </div>
+                <div className="p-4">
+                  <p className="text-xs text-slate-500">Hour of Day</p>
+                  <p className="mt-1 text-xl font-mono font-semibold text-slate-900 tabular-nums">
+                    {String(inputs.hourOfDay).padStart(2, '0')}:00
+                  </p>
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    {formatHour(inputs.hourOfDay).split('(')[1]?.replace(')', '')}
+                  </p>
+                </div>
+                <div className="p-4">
+                  <p className="text-xs text-slate-500">Previous Indoor</p>
+                  <p className="mt-1 text-xl font-mono font-semibold text-slate-900 tabular-nums">
+                    {inputs.previousIndoorTemp.toFixed(1)} °C
+                  </p>
+                </div>
+                <div className="p-4 col-span-2 sm:col-span-1">
+                  <p className="text-xs text-slate-500">Humidity</p>
+                  <p className="mt-1 text-xl font-mono font-semibold text-slate-900 tabular-nums">
+                    {inputs.humidity}%
+                  </p>
+                </div>
+              </section>
+
+              {/* Two Core Visualizations */}
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <IndoorVsOutsideChart
+                  curve={outsideCurve}
+                  dataset={trainedModel.dataset}
+                  currentOutside={inputs.outsideTemp}
+                  currentPredicted={predictedTemp}
+                />
+                <OccupancyVsTempChart
+                  curve={occupancyCurve}
+                  currentStudents={inputs.studentCount}
+                  currentPredicted={predictedTemp}
+                />
+              </div>
+
+              {/* Model Performance & Feature Importance */}
+              <section
+                aria-label="Random Forest model performance and feature importances"
+                className="bg-white border border-slate-200 rounded-xl p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start"
+              >
+                <div className="lg:col-span-5 space-y-3">
+                  <div>
+                    <h2 className="text-base font-semibold text-slate-900">
+                      Model Accuracy on Held-Out Test Data
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Evaluated automatically on {trainedModel.metrics.testCount} unseen synthetic
+                      classroom samples ({trainedModel.metrics.trainCount} training samples)
+                    </p>
+                  </div>
+
+                  <dl className="grid grid-cols-3 gap-4 pt-2">
+                    <div>
+                      <dt className="text-xs text-slate-500">R² Score</dt>
+                      <dd className="text-2xl font-mono font-semibold text-blue-700 tabular-nums mt-0.5">
+                        {trainedModel.metrics.r2.toFixed(3)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-slate-500">MAE</dt>
+                      <dd className="text-2xl font-mono font-semibold text-slate-900 tabular-nums mt-0.5">
+                        {trainedModel.metrics.mae.toFixed(2)}°
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-slate-500">RMSE</dt>
+                      <dd className="text-2xl font-mono font-semibold text-slate-900 tabular-nums mt-0.5">
+                        {trainedModel.metrics.rmse.toFixed(2)}°
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+
+                <div className="lg:col-span-7 space-y-3 lg:border-l lg:border-slate-200 lg:pl-6">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      Learned Feature Importance
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Relative variance reduction contributed by each input across{' '}
+                      {trainedModel.metrics.treeCount} decision trees
+                    </p>
+                  </div>
+                  <div className="space-y-2.5 pt-1">
+                    {trainedModel.featureImportances.map((item) => {
+                      const pct = item.importance * 100;
+                      return (
+                        <div key={item.key} className="space-y-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-medium text-slate-700">{item.label}</span>
+                            <span className="font-mono tabular-nums text-slate-600">
+                              {pct.toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-blue-700"
+                              style={{ width: `${Math.max(2, Math.round(pct))}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </section>
+
+              {/* Expandable Machine Learning Information Section */}
+              <MlInfoAccordion />
+            </div>
+          ) : activeTab === 'dataset' ? (
+            <div className="max-w-6xl mx-auto">
+              <DatasetModelView trainedModel={trainedModel} onRetrain={handleRetrain} />
+            </div>
+          ) : (
+            <div className="max-w-6xl mx-auto">
+              <PythonCodeView />
+            </div>
+          )}
+        </main>
+      </div>
+
+      {/* Quiet Academic Footer */}
+      <footer className="bg-white border-t border-slate-200 py-4 px-6">
+        <div className="max-w-[1600px] mx-auto flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+          <span>Smart Classroom Temperature Predictor · Developed by Aditya Dwivedi</span>
+          <span>Educational AI/ML Demonstration · Random Forest Regressor</span>
+        </div>
+      </footer>
+    </div>
+  );
+}
